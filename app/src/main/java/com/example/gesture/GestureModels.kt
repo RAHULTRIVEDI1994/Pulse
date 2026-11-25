@@ -135,8 +135,8 @@ data class GestureMappingConfig(
             AirPodsInputGesture.RAPID_DOUBLE_PRESS to SystemIntentAction.NEXT_TRACK,
             AirPodsInputGesture.TRIPLE_PRESS to SystemIntentAction.PREVIOUS_TRACK,
             AirPodsInputGesture.SINGLE_PRESS_HOOK to SystemIntentAction.TOGGLE_PLAY_PAUSE,
-            AirPodsInputGesture.POD_NEXT_SIGNAL to SystemIntentAction.VOLUME_UP,
-            AirPodsInputGesture.POD_PREVIOUS_SIGNAL to SystemIntentAction.VOLUME_DOWN,
+            AirPodsInputGesture.POD_NEXT_SIGNAL to SystemIntentAction.NEXT_TRACK,
+            AirPodsInputGesture.POD_PREVIOUS_SIGNAL to SystemIntentAction.PREVIOUS_TRACK,
             AirPodsInputGesture.VOICE_ASSIST_SIGNAL to SystemIntentAction.ANNOUNCE_BATTERY
         )
     }

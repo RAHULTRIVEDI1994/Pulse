@@ -43,6 +43,11 @@ data class PodBatteryState(
     val isConnected: Boolean get() = percentage != null
 }
 
+enum class TelemetrySource(val label: String) {
+    BLE_CONTINUITY("BLE 0x004C"),
+    CLASSIC_BT("Classic BT")
+}
+
 data class AirPodsTelemetry(
     val model: AirPodsModel,
     val deviceAddress: String,
@@ -54,7 +59,8 @@ data class AirPodsTelemetry(
     val lidOpenCount: Int,
     val primaryPod: PodSide,
     val rawHex: String,
-    val timestampMillis: Long = System.currentTimeMillis()
+    val timestampMillis: Long = System.currentTimeMillis(),
+    val source: TelemetrySource = TelemetrySource.BLE_CONTINUITY
 ) {
     val proximityZone: ProximityZone
         get() = when {

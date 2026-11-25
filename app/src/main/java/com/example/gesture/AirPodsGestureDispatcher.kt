@@ -27,6 +27,7 @@ class AirPodsGestureDispatcher(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val eventIdGen = AtomicLong(1L)
     private val internalDispatchGuard = AtomicBoolean(false)
+    private val guardUntilMillis = AtomicLong(0L)
 
     private val _config = MutableStateFlow(GestureMappingConfig())
     val config: StateFlow<GestureMappingConfig> = _config.asStateFlow()
@@ -45,6 +46,17 @@ class AirPodsGestureDispatcher(
 
     fun setInternalDispatchGuard(active: Boolean) {
         internalDispatchGuard.set(active)
+        if (!active) {
+            guardUntilMillis.set(0L)
+        }
+    }
+
+    fun armTimedDispatchGuard(durationMs: Long = 450L) {
+        guardUntilMillis.set(System.currentTimeMillis() + durationMs)
+    }
+
+    private fun isInternalGuardActive(): Boolean {
+        return internalDispatchGuard.get() || System.currentTimeMillis() < guardUntilMillis.get()
     }
 
     fun updateConfig(newConfig: GestureMappingConfig) {
@@ -75,8 +87,7 @@ class AirPodsGestureDispatcher(
         sourceLabel: String = "AirPods AVRCP",
         isSimulatedTest: Boolean = false
     ): Boolean {
-        if (internalDispatchGuard.get() && !isSimulatedTest) return false
-        if (action != KeyEvent.ACTION_DOWN || repeatCount > 0) return false
+        if (isInternalGuardActive() && !isSimulatedTest) return false
 
         val cfg = _config.value
         if (!cfg.enabled && !isSimulatedTest) return false
@@ -86,40 +97,60 @@ class AirPodsGestureDispatcher(
 
         if (!isSupportedMediaKey(keyCode)) return false
 
+        // Consume ACTION_UP for supported media keys so the matching UP event isn't
+        // leaked to the underlying OS media stack while we handle ACTION_DOWN.
+        if (action == KeyEvent.ACTION_UP) {
+            return true
+        }
+        if (action != KeyEvent.ACTION_DOWN || repeatCount > 0) return false
+
         return when (keyCode) {
             KeyEvent.KEYCODE_HEADSETHOOK,
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY,
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+            KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_STOP -> {
                 registerCadenceTap(keyCode, sourceLabel, isSimulatedTest, cfg.multiPressWindowMs)
                 true
             }
             KeyEvent.KEYCODE_MEDIA_NEXT -> {
-                resolveAndExecute(
-                    gesture = AirPodsInputGesture.POD_NEXT_SIGNAL,
-                    keyCode = keyCode,
-                    sourceLabel = sourceLabel,
-                    isSimulatedTest = isSimulatedTest
-                )
-                true
+                if (cfg.actionFor(AirPodsInputGesture.POD_NEXT_SIGNAL) == SystemIntentAction.NO_ACTION && !isSimulatedTest) {
+                    false
+                } else {
+                    resolveAndExecute(
+                        gesture = AirPodsInputGesture.POD_NEXT_SIGNAL,
+                        keyCode = keyCode,
+                        sourceLabel = sourceLabel,
+                        isSimulatedTest = isSimulatedTest
+                    )
+                    true
+                }
             }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
-                resolveAndExecute(
-                    gesture = AirPodsInputGesture.POD_PREVIOUS_SIGNAL,
-                    keyCode = keyCode,
-                    sourceLabel = sourceLabel,
-                    isSimulatedTest = isSimulatedTest
-                )
-                true
+                if (cfg.actionFor(AirPodsInputGesture.POD_PREVIOUS_SIGNAL) == SystemIntentAction.NO_ACTION && !isSimulatedTest) {
+                    false
+                } else {
+                    resolveAndExecute(
+                        gesture = AirPodsInputGesture.POD_PREVIOUS_SIGNAL,
+                        keyCode = keyCode,
+                        sourceLabel = sourceLabel,
+                        isSimulatedTest = isSimulatedTest
+                    )
+                    true
+                }
             }
             KeyEvent.KEYCODE_VOICE_ASSIST -> {
-                resolveAndExecute(
-                    gesture = AirPodsInputGesture.VOICE_ASSIST_SIGNAL,
-                    keyCode = keyCode,
-                    sourceLabel = sourceLabel,
-                    isSimulatedTest = isSimulatedTest
-                )
-                true
+                if (cfg.actionFor(AirPodsInputGesture.VOICE_ASSIST_SIGNAL) == SystemIntentAction.NO_ACTION && !isSimulatedTest) {
+                    false
+                } else {
+                    resolveAndExecute(
+                        gesture = AirPodsInputGesture.VOICE_ASSIST_SIGNAL,
+                        keyCode = keyCode,
+                        sourceLabel = sourceLabel,
+                        isSimulatedTest = isSimulatedTest
+                    )
+                    true
+                }
             }
             else -> false
         }
@@ -231,6 +262,7 @@ class AirPodsGestureDispatcher(
             keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
             keyCode == KeyEvent.KEYCODE_MEDIA_PLAY ||
             keyCode == KeyEvent.KEYCODE_MEDIA_PAUSE ||
+            keyCode == KeyEvent.KEYCODE_MEDIA_STOP ||
             keyCode == KeyEvent.KEYCODE_MEDIA_NEXT ||
             keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS ||
             keyCode == KeyEvent.KEYCODE_VOICE_ASSIST

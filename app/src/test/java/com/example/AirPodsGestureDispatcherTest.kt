@@ -105,4 +105,30 @@ class AirPodsGestureDispatcherTest {
         assertFalse(handled)
         assertTrue(fakeExecutor.executed.isEmpty())
     }
+
+    @Test
+    fun `consumes ACTION_UP without double counting and honors timed dispatch guard`() = runTest {
+        val fakeExecutor = FakeExecutor()
+        val dispatcher = AirPodsGestureDispatcher(
+            executor = fakeExecutor,
+            isAirPodsConnectedProvider = { true }
+        )
+
+        val upConsumed = dispatcher.onKeyInput(
+            action = KeyEvent.ACTION_UP,
+            keyCode = KeyEvent.KEYCODE_MEDIA_NEXT,
+            isSimulatedTest = false
+        )
+        assertTrue(upConsumed)
+        assertTrue(fakeExecutor.executed.isEmpty())
+
+        dispatcher.armTimedDispatchGuard(500L)
+        val guarded = dispatcher.onKeyInput(
+            action = KeyEvent.ACTION_DOWN,
+            keyCode = KeyEvent.KEYCODE_MEDIA_NEXT,
+            isSimulatedTest = false
+        )
+        assertFalse(guarded)
+        assertTrue(fakeExecutor.executed.isEmpty())
+    }
 }

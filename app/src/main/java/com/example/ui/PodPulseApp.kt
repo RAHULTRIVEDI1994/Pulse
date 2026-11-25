@@ -293,7 +293,8 @@ fun PodPulseApp(
                             onUpdateBand = { idx, db -> viewModel.updateEqBand(idx, db) },
                             onSetBassBoostEnabled = { viewModel.setBassBoostEnabled(it) },
                             onSetBassBoostStrength = { viewModel.setBassBoostStrength(it) },
-                            onSetLoudnessEnabled = { viewModel.setLoudnessEnabled(it) }
+                            onSetLoudnessEnabled = { viewModel.setLoudnessEnabled(it) },
+                            onSetLoudnessGain = { viewModel.setLoudnessGain(it) }
                         )
                     }
                     composable(PodPulseRoutes.UTILITIES) {

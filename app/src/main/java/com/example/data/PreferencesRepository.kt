@@ -23,13 +23,14 @@ data class CompanionSettings(
     val autoEarDetectionPause: Boolean = true,
     val autoEarDetectionResume: Boolean = true,
     val announceBatteryOnConnect: Boolean = false,
-    val monitorServiceEnabled: Boolean = false,
+    val monitorServiceEnabled: Boolean = true,
     val lowBatteryAlertPercent: Int = 20,
     val eqEnabled: Boolean = true,
     val eqPreset: EqPreset = EqPreset.AIRPODS_CLARITY,
     val bassBoostEnabled: Boolean = false,
     val bassBoostStrength: Int = 650,
     val loudnessEnabled: Boolean = false,
+    val loudnessGainMb: Int = 600,
     val customBandLevels: List<Float> = EqPreset.AIRPODS_CLARITY.bandOffsetsDb
 )
 
@@ -64,13 +65,14 @@ class PreferencesRepository(private val context: Context) {
             autoEarDetectionPause = prefs[KEY_AUTO_EAR_PAUSE] ?: true,
             autoEarDetectionResume = prefs[KEY_AUTO_EAR_RESUME] ?: true,
             announceBatteryOnConnect = prefs[KEY_ANNOUNCE_BATTERY] ?: false,
-            monitorServiceEnabled = prefs[KEY_MONITOR_SERVICE] ?: false,
+            monitorServiceEnabled = prefs[KEY_MONITOR_SERVICE] ?: true,
             lowBatteryAlertPercent = prefs[KEY_LOW_BATTERY_THRESHOLD] ?: 20,
             eqEnabled = prefs[KEY_EQ_ENABLED] ?: true,
             eqPreset = preset,
             bassBoostEnabled = prefs[KEY_BASS_BOOST_ENABLED] ?: false,
             bassBoostStrength = prefs[KEY_BASS_BOOST_STRENGTH] ?: 650,
             loudnessEnabled = prefs[KEY_LOUDNESS_ENABLED] ?: false,
+            loudnessGainMb = prefs[KEY_LOUDNESS_GAIN_MB] ?: 600,
             customBandLevels = bandLevels
         )
     }
@@ -117,7 +119,7 @@ class PreferencesRepository(private val context: Context) {
                 autoEarDetectionPause = prefs[KEY_AUTO_EAR_PAUSE] ?: true,
                 autoEarDetectionResume = prefs[KEY_AUTO_EAR_RESUME] ?: true,
                 announceBatteryOnConnect = prefs[KEY_ANNOUNCE_BATTERY] ?: false,
-                monitorServiceEnabled = prefs[KEY_MONITOR_SERVICE] ?: false,
+                monitorServiceEnabled = prefs[KEY_MONITOR_SERVICE] ?: true,
                 lowBatteryAlertPercent = prefs[KEY_LOW_BATTERY_THRESHOLD] ?: 20,
                 eqEnabled = prefs[KEY_EQ_ENABLED] ?: true,
                 eqPreset = EqPreset.entries.firstOrNull { it.name == prefs[KEY_EQ_PRESET] }
@@ -125,6 +127,7 @@ class PreferencesRepository(private val context: Context) {
                 bassBoostEnabled = prefs[KEY_BASS_BOOST_ENABLED] ?: false,
                 bassBoostStrength = prefs[KEY_BASS_BOOST_STRENGTH] ?: 650,
                 loudnessEnabled = prefs[KEY_LOUDNESS_ENABLED] ?: false,
+                loudnessGainMb = prefs[KEY_LOUDNESS_GAIN_MB] ?: 600,
                 customBandLevels = (0 until 5).map { idx -> prefs[bandKey(idx)] ?: 0f }
             )
             val updated = transform(current)
@@ -139,6 +142,7 @@ class PreferencesRepository(private val context: Context) {
             prefs[KEY_BASS_BOOST_ENABLED] = updated.bassBoostEnabled
             prefs[KEY_BASS_BOOST_STRENGTH] = updated.bassBoostStrength
             prefs[KEY_LOUDNESS_ENABLED] = updated.loudnessEnabled
+            prefs[KEY_LOUDNESS_GAIN_MB] = updated.loudnessGainMb
             updated.customBandLevels.forEachIndexed { idx, value ->
                 prefs[bandKey(idx)] = value
             }
@@ -164,6 +168,7 @@ class PreferencesRepository(private val context: Context) {
         val KEY_BASS_BOOST_ENABLED = booleanPreferencesKey("bass_boost_enabled")
         val KEY_BASS_BOOST_STRENGTH = intPreferencesKey("bass_boost_strength")
         val KEY_LOUDNESS_ENABLED = booleanPreferencesKey("loudness_enabled")
+        val KEY_LOUDNESS_GAIN_MB = intPreferencesKey("loudness_gain_mb")
 
         fun gestureKey(gesture: AirPodsInputGesture) =
             stringPreferencesKey("gesture_map_${gesture.name.lowercase()}")

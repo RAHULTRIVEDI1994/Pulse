@@ -43,6 +43,11 @@ class BluetoothDeviceMonitor(private val context: Context) {
     private val _isAirPodsAudioRouted = MutableStateFlow(false)
     val isAirPodsAudioRouted: StateFlow<Boolean> = _isAirPodsAudioRouted.asStateFlow()
 
+    private val _classicBatteryPercent = MutableStateFlow<Int?>(null)
+    val classicBatteryPercent: StateFlow<Int?> = _classicBatteryPercent.asStateFlow()
+
+    var onBluetoothTurnedOn: (() -> Unit)? = null
+
     private var a2dpProxy: BluetoothA2dp? = null
     private var headsetProxy: BluetoothHeadset? = null
     private var isRegistered = false
@@ -71,7 +76,13 @@ class BluetoothDeviceMonitor(private val context: Context) {
             when (intent?.action) {
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
                     val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
-                    _isBluetoothEnabled.value = state == BluetoothAdapter.STATE_ON
+                    val isOn = state == BluetoothAdapter.STATE_ON
+                    _isBluetoothEnabled.value = isOn
+                    if (isOn) {
+                        onBluetoothTurnedOn?.invoke()
+                    } else {
+                        _classicBatteryPercent.value = null
+                    }
                     refreshConnectedDevices()
                 }
                 BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
@@ -79,6 +90,14 @@ class BluetoothDeviceMonitor(private val context: Context) {
                 BluetoothDevice.ACTION_ACL_CONNECTED,
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                     refreshConnectedDevices()
+                }
+                ACTION_BATTERY_LEVEL_CHANGED -> {
+                    val level = intent.getIntExtra(EXTRA_BATTERY_LEVEL, -1)
+                    if (level in 0..100) {
+                        _classicBatteryPercent.value = level
+                    } else {
+                        refreshClassicBattery()
+                    }
                 }
             }
         }
@@ -106,6 +125,7 @@ class BluetoothDeviceMonitor(private val context: Context) {
                 addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
                 addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                addAction(ACTION_BATTERY_LEVEL_CHANGED)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.registerReceiver(bluetoothReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -147,6 +167,7 @@ class BluetoothDeviceMonitor(private val context: Context) {
         if (!hasConnectPermission || adapter == null || !adapter.isEnabled) {
             _connectedDevices.value = emptyList()
             _bondedAudioDevices.value = emptyList()
+            _classicBatteryPercent.value = null
             return
         }
 
@@ -192,11 +213,40 @@ class BluetoothDeviceMonitor(private val context: Context) {
                 }
                 .sortedByDescending { it.isA2dpConnected || it.isLikelyAirPods }
             _bondedAudioDevices.value = bonded
+
+            refreshClassicBattery(a2dpConnected + hfpConnected)
         } catch (_: SecurityException) {
             _connectedDevices.value = emptyList()
             _bondedAudioDevices.value = emptyList()
+            _classicBatteryPercent.value = null
         }
         refreshAudioRouting()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun refreshClassicBattery(connectedRaw: List<BluetoothDevice> = emptyList()) {
+        val devices = if (connectedRaw.isNotEmpty()) {
+            connectedRaw
+        } else {
+            (a2dpProxy?.connectedDevices.orEmpty() + headsetProxy?.connectedDevices.orEmpty())
+        }
+        val preferred = devices.firstOrNull { isAirPodsName(it.name.orEmpty()) } ?: devices.firstOrNull()
+        if (preferred == null) {
+            _classicBatteryPercent.value = null
+            return
+        }
+        val level = readClassicBatteryLevel(preferred)
+        if (level in 0..100) {
+            _classicBatteryPercent.value = level
+        }
+    }
+
+    private fun readClassicBatteryLevel(device: BluetoothDevice): Int? {
+        return runCatching {
+            val method = BluetoothDevice::class.java.getMethod("getBatteryLevel")
+            val result = method.invoke(device) as? Int
+            result?.takeIf { it in 0..100 }
+        }.getOrNull()
     }
 
     private fun refreshAudioRouting() {
@@ -212,5 +262,10 @@ class BluetoothDeviceMonitor(private val context: Context) {
     private fun isAirPodsName(name: String): Boolean {
         val lower = name.lowercase()
         return lower.contains("airpod") || lower.contains("pod") || lower.contains("beats")
+    }
+
+    companion object {
+        private const val ACTION_BATTERY_LEVEL_CHANGED = "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED"
+        private const val EXTRA_BATTERY_LEVEL = "android.bluetooth.device.extra.BATTERY_LEVEL"
     }
 }

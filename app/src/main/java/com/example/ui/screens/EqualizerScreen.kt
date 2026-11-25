@@ -68,6 +68,7 @@ fun EqualizerScreen(
     onSetBassBoostEnabled: (Boolean) -> Unit,
     onSetBassBoostStrength: (Int) -> Unit,
     onSetLoudnessEnabled: (Boolean) -> Unit,
+    onSetLoudnessGain: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val eq = state.equalizerState
@@ -97,9 +98,11 @@ fun EqualizerScreen(
                     bassBoostEnabled = eq.bassBoostEnabled,
                     bassStrength = eq.bassBoostStrength,
                     loudnessEnabled = eq.loudnessEnabled,
+                    loudnessGainMb = eq.loudnessGainMb,
                     onToggleBassBoost = onSetBassBoostEnabled,
                     onStrengthChange = onSetBassBoostStrength,
-                    onToggleLoudness = onSetLoudnessEnabled
+                    onToggleLoudness = onSetLoudnessEnabled,
+                    onLoudnessGainChange = onSetLoudnessGain
                 )
             }
 
@@ -261,11 +264,13 @@ private fun BassBoostModeCard(
     bassBoostEnabled: Boolean,
     bassStrength: Int,
     loudnessEnabled: Boolean,
+    loudnessGainMb: Int,
     onToggleBassBoost: (Boolean) -> Unit,
     onStrengthChange: (Int) -> Unit,
-    onToggleLoudness: (Boolean) -> Unit
+    onToggleLoudness: (Boolean) -> Unit,
+    onLoudnessGainChange: (Int) -> Unit
 ) {
-    val containerColor = if (bassBoostEnabled) {
+    val containerColor = if (bassBoostEnabled || loudnessEnabled) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
     } else {
         MaterialTheme.colorScheme.surface
@@ -307,7 +312,7 @@ private fun BassBoostModeCard(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Hardware low-frequency driver enhancement for AirPods 1",
+                            text = "Low-frequency driver enhancement without volume ducking",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -363,12 +368,12 @@ private fun BassBoostModeCard(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "Loudness Enhancer (+3.5 dB)",
+                            text = "Volume Boost (+${"%.1f".format(loudnessGainMb / 100f)} dB)",
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            text = "Adds dynamic headroom in noisy outdoor environments",
+                            text = "Clean pre-amp gain boost with peak limiter protection",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -378,6 +383,30 @@ private fun BassBoostModeCard(
                     checked = loudnessEnabled,
                     onCheckedChange = onToggleLoudness,
                     modifier = Modifier.testTag("loudness_enhancer_switch")
+                )
+            }
+
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Volume Boost Gain",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "+${"%.1f".format(loudnessGainMb / 100f)} dB",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                Slider(
+                    value = loudnessGainMb.toFloat(),
+                    onValueChange = { onLoudnessGainChange(it.toInt()) },
+                    valueRange = 0f..1500f,
+                    enabled = loudnessEnabled,
+                    modifier = Modifier.testTag("loudness_gain_slider")
                 )
             }
         }

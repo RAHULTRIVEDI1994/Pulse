@@ -8,6 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
@@ -19,11 +22,13 @@ import com.example.MainActivity
 import com.example.R
 import com.example.bluetooth.AirPodsTelemetry
 import com.example.core.PodPulseContainer
+import com.example.gesture.AirPodsMediaButtonReceiver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -39,10 +44,12 @@ class AirPodsMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
+    private var suppressionJob: Job? = null
     private var mediaSession: MediaSession? = null
     private var wasAnyPodInEar = false
     private var autoPausedByEarDetection = false
     private var lowBatteryNotified = false
+    private var lastInterceptionEnabled = false
 
     override fun onCreate() {
         super.onCreate()
@@ -71,16 +78,27 @@ class AirPodsMonitorService : Service() {
         container.bleScanner.startScanning(hasScanPerm)
         container.deviceMonitor.startMonitoring(hasConnectPerm)
 
+        container.onSuppressMediaSessionForDispatch = { durationMs ->
+            suppressMediaSessionTemporarily(durationMs)
+        }
+
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
             combine(
-                container.bleScanner.telemetry,
+                container.effectiveTelemetry,
                 container.preferencesRepository.companionSettingsFlow,
                 container.preferencesRepository.gestureConfigFlow
             ) { telemetry, settings, gestureCfg ->
                 Triple(telemetry, settings, gestureCfg)
             }.collectLatest { (telemetry, settings, gestureCfg) ->
-                mediaSession?.isActive = gestureCfg.enabled && gestureCfg.interceptMediaButtons
+                val shouldIntercept = gestureCfg.enabled && gestureCfg.interceptMediaButtons
+                if (suppressionJob?.isActive != true) {
+                    updateMediaSessionState(shouldIntercept)
+                }
+                if (shouldIntercept && !lastInterceptionEnabled) {
+                    pulseSilentAudioForMediaSessionPriority()
+                }
+                lastInterceptionEnabled = shouldIntercept
                 updateNotification(telemetry)
 
                 if (telemetry != null) {
@@ -100,6 +118,8 @@ class AirPodsMonitorService : Service() {
 
     override fun onDestroy() {
         monitorJob?.cancel()
+        suppressionJob?.cancel()
+        PodPulseContainer.get(this).onSuppressMediaSessionForDispatch = null
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
@@ -116,18 +136,18 @@ class AirPodsMonitorService : Service() {
         session.setFlags(
             MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
         )
-        session.setPlaybackState(
-            PlaybackState.Builder()
-                .setActions(
-                    PlaybackState.ACTION_PLAY or
-                        PlaybackState.ACTION_PAUSE or
-                        PlaybackState.ACTION_PLAY_PAUSE or
-                        PlaybackState.ACTION_SKIP_TO_NEXT or
-                        PlaybackState.ACTION_SKIP_TO_PREVIOUS
-                )
-                .setState(PlaybackState.STATE_PAUSED, 0L, 1f)
-                .build()
+
+        val mbrIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+            setClass(this@AirPodsMonitorService, AirPodsMediaButtonReceiver::class.java)
+        }
+        val mbrPendingIntent = PendingIntent.getBroadcast(
+            this,
+            0,
+            mbrIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        session.setMediaButtonReceiver(mbrPendingIntent)
+
         session.setCallback(object : MediaSession.Callback() {
             override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
                 val keyEvent: KeyEvent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -146,9 +166,113 @@ class AirPodsMonitorService : Service() {
                 }
                 return super.onMediaButtonEvent(mediaButtonIntent)
             }
+
+            override fun onPlay() {
+                container.gestureDispatcher.onKeyInput(
+                    action = KeyEvent.ACTION_DOWN,
+                    keyCode = KeyEvent.KEYCODE_MEDIA_PLAY,
+                    sourceLabel = "MediaSession Transport"
+                )
+            }
+
+            override fun onPause() {
+                container.gestureDispatcher.onKeyInput(
+                    action = KeyEvent.ACTION_DOWN,
+                    keyCode = KeyEvent.KEYCODE_MEDIA_PAUSE,
+                    sourceLabel = "MediaSession Transport"
+                )
+            }
+
+            override fun onSkipToNext() {
+                container.gestureDispatcher.onKeyInput(
+                    action = KeyEvent.ACTION_DOWN,
+                    keyCode = KeyEvent.KEYCODE_MEDIA_NEXT,
+                    sourceLabel = "MediaSession Transport"
+                )
+            }
+
+            override fun onSkipToPrevious() {
+                container.gestureDispatcher.onKeyInput(
+                    action = KeyEvent.ACTION_DOWN,
+                    keyCode = KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+                    sourceLabel = "MediaSession Transport"
+                )
+            }
         })
-        session.isActive = true
         mediaSession = session
+        updateMediaSessionState(true)
+    }
+
+    private fun updateMediaSessionState(active: Boolean) {
+        val session = mediaSession ?: return
+        session.setPlaybackState(
+            PlaybackState.Builder()
+                .setActions(
+                    PlaybackState.ACTION_PLAY or
+                        PlaybackState.ACTION_PAUSE or
+                        PlaybackState.ACTION_PLAY_PAUSE or
+                        PlaybackState.ACTION_SKIP_TO_NEXT or
+                        PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                        PlaybackState.ACTION_STOP
+                )
+                .setState(
+                    if (active) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                    0L,
+                    1f
+                )
+                .build()
+        )
+        session.isActive = active
+    }
+
+    private fun suppressMediaSessionTemporarily(durationMs: Long) {
+        suppressionJob?.cancel()
+        mediaSession?.isActive = false
+        suppressionJob = serviceScope.launch {
+            delay(durationMs)
+            val cfg = PodPulseContainer.get(this@AirPodsMonitorService).gestureDispatcher.config.value
+            updateMediaSessionState(cfg.enabled && cfg.interceptMediaButtons)
+        }
+    }
+
+    /**
+     * Plays a tiny silent AudioTrack frame (without requesting AudioFocus so active music
+     * is never paused) so Android's MediaSessionService prioritizes PodPulse for AVRCP keys.
+     */
+    private fun pulseSilentAudioForMediaSessionPriority() {
+        serviceScope.launch(Dispatchers.IO) {
+            runCatching {
+                val sampleRate = 8000
+                val minBuf = AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                ).coerceAtLeast(640)
+                val track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(minBuf)
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .build()
+                val silence = ByteArray(minBuf)
+                track.write(silence, 0, silence.size)
+                track.play()
+                delay(80L)
+                track.stop()
+                track.release()
+            }
+        }
     }
 
     private fun handleEarDetection(

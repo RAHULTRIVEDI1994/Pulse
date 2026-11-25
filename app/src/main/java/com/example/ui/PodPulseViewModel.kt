@@ -74,7 +74,7 @@ class PodPulseViewModel(application: Application) : AndroidViewModel(application
     private var lastVoiceAnnouncementTimestamp = 0L
 
     private val bluetoothSnapshotFlow = combine(
-        container.bleScanner.telemetry,
+        container.effectiveTelemetry,
         container.bleScanner.scanStatus,
         container.bleScanner.errorDetail,
         container.deviceMonitor.isBluetoothEnabled,
@@ -156,11 +156,15 @@ class PodPulseViewModel(application: Application) : AndroidViewModel(application
             }
             container.equalizerEngine.setBassBoostStrength(saved.bassBoostStrength)
             container.equalizerEngine.setBassBoostEnabled(saved.bassBoostEnabled)
+            container.equalizerEngine.setLoudnessGain(saved.loudnessGainMb)
             container.equalizerEngine.setLoudnessEnabled(saved.loudnessEnabled)
+            if (saved.monitorServiceEnabled && readPermissionStatus().allBluetoothGranted) {
+                runCatching { AirPodsMonitorService.start(getApplication()) }
+            }
         }
 
         viewModelScope.launch {
-            container.bleScanner.telemetry.collect { telemetry ->
+            container.effectiveTelemetry.collect { telemetry ->
                 if (telemetry != null) {
                     recordBatterySample(telemetry)
                     val settings = container.preferencesRepository.companionSettingsFlow.first()
@@ -190,6 +194,14 @@ class PodPulseViewModel(application: Application) : AndroidViewModel(application
         container.deviceMonitor.startMonitoring(perms.hasBluetoothConnect)
         if (perms.hasBluetoothScan) {
             container.bleScanner.startScanning(true)
+        }
+        if (perms.allBluetoothGranted) {
+            viewModelScope.launch {
+                val settings = container.preferencesRepository.companionSettingsFlow.first()
+                if (settings.monitorServiceEnabled) {
+                    runCatching { AirPodsMonitorService.start(getApplication()) }
+                }
+            }
         }
         refreshMusicVolume()
     }
@@ -370,6 +382,13 @@ class PodPulseViewModel(application: Application) : AndroidViewModel(application
         container.equalizerEngine.setLoudnessEnabled(enabled)
         viewModelScope.launch {
             container.preferencesRepository.updateCompanionSettings { it.copy(loudnessEnabled = enabled) }
+        }
+    }
+
+    fun setLoudnessGain(gainMb: Int) {
+        container.equalizerEngine.setLoudnessGain(gainMb)
+        viewModelScope.launch {
+            container.preferencesRepository.updateCompanionSettings { it.copy(loudnessGainMb = gainMb) }
         }
     }
 

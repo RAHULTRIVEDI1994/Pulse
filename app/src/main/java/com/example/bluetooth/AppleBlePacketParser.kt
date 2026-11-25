@@ -8,7 +8,8 @@ object AppleBlePacketParser {
 
     const val APPLE_MANUFACTURER_ID = 0x004C
     private const val PROXIMITY_PAIRING_TYPE = 0x07
-    private const val MIN_PROXIMITY_PAYLOAD_BYTES = 16
+    private const val MIN_PROXIMITY_PAYLOAD_BYTES = 10
+    private const val SUBTYPE_PAIRING_SETUP = 0x00
 
     fun parseManufacturerData(
         manufacturerData: ByteArray,
@@ -20,6 +21,11 @@ object AppleBlePacketParser {
 
         val messageType = manufacturerData[0].toInt() and 0xFF
         if (messageType != PROXIMITY_PAIRING_TYPE) return null
+
+        // Subtype 0x00 is broadcast during Pairing/Setup button press and does not carry
+        // standard paired battery/charging flags at offsets 5..8.
+        val pairingSubtype = manufacturerData[2].toInt() and 0xFF
+        if (pairingSubtype == SUBTYPE_PAIRING_SETUP) return null
 
         // Bytes 3..4 hold the big-endian Apple audio product model code (e.g. 0x0220 for AirPods 1)
         val modelHigh = manufacturerData[3].toInt() and 0xFF
@@ -48,14 +54,9 @@ object AppleBlePacketParser {
         val rightNibble = if (isFlipped) lowerBatteryNibble else upperBatteryNibble
         val caseNibble = chargeAndCaseByte and 0x0F
 
-        // Charging flags live in the upper nibble of byte 7
-        val chargeFlags = (chargeAndCaseByte ushr 4) and 0x0F
-        val primaryCharging = (chargeFlags and 0x01) != 0
-        val secondaryCharging = (chargeFlags and 0x02) != 0
-        val caseCharging = (chargeFlags and 0x04) != 0
-
-        val leftCharging = if (isFlipped) primaryCharging else secondaryCharging
-        val rightCharging = if (isFlipped) secondaryCharging else primaryCharging
+        val leftPct = decodeBatteryNibble(leftNibble)
+        val rightPct = decodeBatteryNibble(rightNibble)
+        val casePct = decodeBatteryNibble(caseNibble)
 
         // In-ear detection flags live in the lower nibble of byte 5
         val primaryInEar = (statusByte and 0x02) != 0
@@ -64,26 +65,44 @@ object AppleBlePacketParser {
         val leftInEar = if (isFlipped) primaryInEar else secondaryInEar
         val rightInEar = if (isFlipped) secondaryInEar else primaryInEar
 
+        // Charging flags live in the upper nibble of byte 7.
+        // Nibble 0x0F indicates unavailable/unknown flags; ignore charging bits in that state.
+        // Per Apple Continuity / OpenPods layout:
+        //   when flipped:   bit 1 (0x02) = Left,  bit 0 (0x01) = Right
+        //   when unflipped: bit 0 (0x01) = Left,  bit 1 (0x02) = Right
+        //   bit 2 (0x04) = Case charging
+        val chargeFlags = (chargeAndCaseByte ushr 4) and 0x0F
+        val validChargeFlags = chargeFlags != 0x0F
+
+        val rawLeftCharging = validChargeFlags && (chargeFlags and (if (isFlipped) 0x02 else 0x01)) != 0
+        val rawRightCharging = validChargeFlags && (chargeFlags and (if (isFlipped) 0x01 else 0x02)) != 0
+        val rawCaseCharging = validChargeFlags && (chargeFlags and 0x04) != 0
+
+        // Pods in-ear or disconnected cannot be charging; disconnected case cannot be charging.
+        val leftCharging = rawLeftCharging && leftPct != null && !leftInEar
+        val rightCharging = rawRightCharging && rightPct != null && !rightInEar
+        val caseCharging = rawCaseCharging && casePct != null
+
         // Lid state encoded in byte 8 (lower bits indicate lid open counter / open flag)
         val lidOpenCount = lidByte and 0x07
-        val isLidOpen = (lidByte and 0x08) == 0 && (leftCharging || rightCharging || caseNibble <= 10)
+        val isLidOpen = (lidByte and 0x08) == 0 && casePct != null
 
         return AirPodsTelemetry(
             model = model,
             deviceAddress = deviceAddress,
             rssi = rssi,
             leftPod = PodBatteryState(
-                percentage = decodeBatteryNibble(leftNibble),
+                percentage = leftPct,
                 isCharging = leftCharging,
                 isInEar = leftInEar
             ),
             rightPod = PodBatteryState(
-                percentage = decodeBatteryNibble(rightNibble),
+                percentage = rightPct,
                 isCharging = rightCharging,
                 isInEar = rightInEar
             ),
             caseBattery = PodBatteryState(
-                percentage = decodeBatteryNibble(caseNibble),
+                percentage = casePct,
                 isCharging = caseCharging,
                 isInEar = false
             ),
@@ -91,7 +110,8 @@ object AppleBlePacketParser {
             lidOpenCount = lidOpenCount,
             primaryPod = primaryPod,
             rawHex = manufacturerData.toHexString(),
-            timestampMillis = timestampMillis
+            timestampMillis = timestampMillis,
+            source = TelemetrySource.BLE_CONTINUITY
         )
     }
 

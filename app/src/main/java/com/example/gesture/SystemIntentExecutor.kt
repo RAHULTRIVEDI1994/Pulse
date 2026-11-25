@@ -122,14 +122,10 @@ class SystemIntentExecutor(
         val am = audioManager ?: return
         val now = SystemClock.uptimeMillis()
         onInternalKeyDispatch(true)
-        try {
-            val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
-            val upEvent = KeyEvent(now, now + 15L, KeyEvent.ACTION_UP, keyCode, 0)
-            am.dispatchMediaKeyEvent(downEvent)
-            am.dispatchMediaKeyEvent(upEvent)
-        } finally {
-            onInternalKeyDispatch(false)
-        }
+        val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
+        val upEvent = KeyEvent(now, now + 15L, KeyEvent.ACTION_UP, keyCode, 0)
+        am.dispatchMediaKeyEvent(downEvent)
+        am.dispatchMediaKeyEvent(upEvent)
     }
 
     private fun launchIntentSafely(

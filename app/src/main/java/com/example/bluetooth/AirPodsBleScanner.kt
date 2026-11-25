@@ -31,7 +31,10 @@ enum class BleScanStatus {
     SCAN_FAILED
 }
 
-class AirPodsBleScanner(private val context: Context) {
+class AirPodsBleScanner(
+    private val context: Context,
+    private val isClassicConnectedProvider: () -> Boolean = { false }
+) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val bluetoothManager: BluetoothManager? =
@@ -52,7 +55,9 @@ class AirPodsBleScanner(private val context: Context) {
     val errorDetail: StateFlow<String?> = _errorDetail.asStateFlow()
 
     private var staleWatcherJob: Job? = null
+    private var scanRefreshJob: Job? = null
     private var isScanning = false
+    private var lastScanPermissionGranted = false
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -82,13 +87,16 @@ class AirPodsBleScanner(private val context: Context) {
         ) ?: return
 
         val previous = _telemetry.value
+        val now = parsed.timestampMillis
         // Prefer strongest signal if multiple nearby AirPods broadcast simultaneously
         if (previous == null ||
             parsed.deviceAddress == previous.deviceAddress ||
+            parsed.model == previous.model ||
             parsed.rssi >= previous.rssi - 8 ||
-            System.currentTimeMillis() - previous.timestampMillis > 5_000L
+            now - previous.timestampMillis > 5_000L
         ) {
-            _telemetry.value = parsed
+            val merged = mergePartialTelemetry(previous, parsed, now)
+            _telemetry.value = merged
         }
 
         val logEntry = BlePacketLog(
@@ -103,8 +111,49 @@ class AirPodsBleScanner(private val context: Context) {
         }
     }
 
+    /**
+     * When AirPods are out of the case and the lid closes, Apple stops broadcasting the
+     * case battery nibble (0x0F -> null). Preserve recent known percentages for the same
+     * device/model while reflecting live in-ear & charging flags from the new frame.
+     */
+    private fun mergePartialTelemetry(
+        previous: AirPodsTelemetry?,
+        current: AirPodsTelemetry,
+        nowMillis: Long
+    ): AirPodsTelemetry {
+        if (previous == null ||
+            previous.model != current.model ||
+            nowMillis - previous.timestampMillis > PARTIAL_CARRY_WINDOW_MS
+        ) {
+            return current
+        }
+
+        val leftPod = if (current.leftPod.percentage == null && previous.leftPod.percentage != null) {
+            current.leftPod.copy(percentage = previous.leftPod.percentage, isCharging = false)
+        } else {
+            current.leftPod
+        }
+        val rightPod = if (current.rightPod.percentage == null && previous.rightPod.percentage != null) {
+            current.rightPod.copy(percentage = previous.rightPod.percentage, isCharging = false)
+        } else {
+            current.rightPod
+        }
+        val caseBattery = if (current.caseBattery.percentage == null && previous.caseBattery.percentage != null) {
+            current.caseBattery.copy(percentage = previous.caseBattery.percentage, isCharging = false)
+        } else {
+            current.caseBattery
+        }
+
+        return current.copy(
+            leftPod = leftPod,
+            rightPod = rightPod,
+            caseBattery = caseBattery
+        )
+    }
+
     @SuppressLint("MissingPermission")
     fun startScanning(hasScanPermission: Boolean) {
+        lastScanPermissionGranted = hasScanPermission
         if (!hasScanPermission) {
             _scanStatus.value = BleScanStatus.PERMISSION_REQUIRED
             return
@@ -125,8 +174,10 @@ class AirPodsBleScanner(private val context: Context) {
         }
         if (isScanning) return
 
+        // Filter on Apple Manufacturer ID (0x004C) without a byte-prefix mask so OEM BLE chipsets
+        // never drop AirPods frames; AppleBlePacketParser validates 0x07 frames in Kotlin.
         val filter = ScanFilter.Builder()
-            .setManufacturerData(AppleBlePacketParser.APPLE_MANUFACTURER_ID, byteArrayOf(0x07), byteArrayOf(0xFF.toByte()))
+            .setManufacturerData(AppleBlePacketParser.APPLE_MANUFACTURER_ID, byteArrayOf())
             .build()
 
         val settingsBuilder = ScanSettings.Builder()
@@ -143,6 +194,7 @@ class AirPodsBleScanner(private val context: Context) {
             isScanning = true
             _scanStatus.value = BleScanStatus.SCANNING
             startStaleWatcher()
+            startScanRefresher()
         } catch (se: SecurityException) {
             isScanning = false
             _scanStatus.value = BleScanStatus.PERMISSION_REQUIRED
@@ -158,6 +210,8 @@ class AirPodsBleScanner(private val context: Context) {
     fun stopScanning() {
         staleWatcherJob?.cancel()
         staleWatcherJob = null
+        scanRefreshJob?.cancel()
+        scanRefreshJob = null
         if (!isScanning) {
             _scanStatus.value = BleScanStatus.IDLE
             return
@@ -180,16 +234,38 @@ class AirPodsBleScanner(private val context: Context) {
         staleWatcherJob?.cancel()
         staleWatcherJob = scope.launch {
             while (isActive) {
-                delay(5_000L)
+                delay(10_000L)
                 val current = _telemetry.value ?: continue
-                if (System.currentTimeMillis() - current.timestampMillis > STALE_TIMEOUT_MS) {
+                val age = System.currentTimeMillis() - current.timestampMillis
+                // Keep telemetry alive while AirPods remain connected over Classic Bluetooth
+                // (out-of-case pods throttle BLE 0x07 broadcasts significantly).
+                val connected = isClassicConnectedProvider()
+                val timeout = if (connected) CONNECTED_STALE_TIMEOUT_MS else DISCONNECTED_STALE_TIMEOUT_MS
+                if (age > timeout) {
                     _telemetry.value = null
                 }
             }
         }
     }
 
+    private fun startScanRefresher() {
+        scanRefreshJob?.cancel()
+        scanRefreshJob = scope.launch {
+            while (isActive) {
+                delay(SCAN_REFRESH_INTERVAL_MS)
+                if (isScanning && lastScanPermissionGranted && bluetoothAdapter?.isEnabled == true) {
+                    runCatching { bleScanner?.stopScan(scanCallback) }
+                    isScanning = false
+                    startScanning(true)
+                }
+            }
+        }
+    }
+
     companion object {
-        private const val STALE_TIMEOUT_MS = 20_000L
+        private const val DISCONNECTED_STALE_TIMEOUT_MS = 60_000L
+        private const val CONNECTED_STALE_TIMEOUT_MS = 10 * 60_000L
+        private const val PARTIAL_CARRY_WINDOW_MS = 30 * 60_000L
+        private const val SCAN_REFRESH_INTERVAL_MS = 12 * 60_000L
     }
 }

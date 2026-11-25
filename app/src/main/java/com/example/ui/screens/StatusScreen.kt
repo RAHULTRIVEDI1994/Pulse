@@ -238,6 +238,8 @@ private fun HeroDeviceCard(
                 ) {
                     val statusLabel = when {
                         telemetry != null && telemetry.isLidOpen -> "Case Lid Open"
+                        telemetry != null && telemetry.source == com.example.bluetooth.TelemetrySource.CLASSIC_BT ->
+                            "Classic BT Linked"
                         telemetry != null -> "BLE Linked • ${telemetry.rssi} dBm"
                         state.isAirPodsAudioRouted -> "Audio Connected"
                         state.scanStatus == BleScanStatus.SCANNING -> "Scanning Nearby..."
@@ -361,7 +363,7 @@ private fun TriPodBatterySection(
                 color = MaterialTheme.colorScheme.onBackground
             )
             Text(
-                text = if (telemetry != null) "BLE 0x004C" else scanStatus.name,
+                text = telemetry?.source?.label ?: scanStatus.name,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
