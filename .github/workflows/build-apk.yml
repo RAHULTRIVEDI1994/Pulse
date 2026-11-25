@@ -44,6 +44,9 @@ jobs:
             fi
           fi
 
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
 
