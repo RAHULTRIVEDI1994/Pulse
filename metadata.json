@@ -1,0 +1,6 @@
+{
+  "name": "PodPulse",
+  "description": "Bluetooth AirPods 1 companion for Android with live battery monitoring, custom double-tap and press gesture mapping, ear detection, and iOS-style controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

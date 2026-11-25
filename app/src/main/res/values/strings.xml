@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PodPulse</string>
+    <string name="nav_status">Status</string>
+    <string name="nav_gestures">Gestures</string>
+    <string name="nav_equalizer">Equalizer</string>
+    <string name="nav_utilities">Utilities</string>
+    <string name="nav_settings">Settings</string>
+    <string name="notification_channel_name">AirPods Live Telemetry</string>
+    <string name="notification_channel_desc">Displays live Left, Right, and Case battery levels and active gesture monitoring.</string>
+    <string name="notification_channel_alerts_name">AirPods Battery Alerts</string>
+    <string name="notification_channel_alerts_desc">Notifies when AirPods or Case battery drops below your configured threshold.</string>
+    <string name="service_scanning_title">PodPulse Active</string>
+    <string name="service_scanning_text">Listening for AirPods BLE telemetry &amp; gesture inputs</string>
+    <string name="popup_done">Done</string>
+    <string name="popup_speak_battery">Announce Battery</string>
+    <string name="find_my_warning">Remove AirPods from your ears before playing the locator chirp.</string>
+</resources>
